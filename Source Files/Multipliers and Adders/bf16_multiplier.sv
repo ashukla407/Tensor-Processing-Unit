@@ -99,9 +99,12 @@ module bf16_multiplier(
         norm_shift_s3 = product_s2[15];
         valid_mantissa_s3 = norm_shift_s3 ? {product_s2[14:0], 8'd0} : {product_s2[13:0], 9'd0};
         final_e_calc_s3 = initial_e_calc_s2 + $signed({1'b0, norm_shift_s3});
-        next_overflow = is_inf_s2 | (final_e_calc_s3 >= 10'sd255);
+        /*next_overflow = is_inf_s2 | (final_e_calc_s3 >= 10'sd255);
         next_underflow = flush_zero_s2 | (final_e_calc_s3 <= 10'sd0);
+        next_nv = is_nan_s2 | (is_inf_s2 && flush_zero_s2);*/
         next_nv = is_nan_s2 | (is_inf_s2 && flush_zero_s2);
+        next_overflow = (is_inf_s2 && !next_nv) | (final_e_calc_s3 >= 10'sd255);
+        next_underflow = flush_zero_s2 | (final_e_calc_s3 <= 10'sd0);
         //output calculation
         if(next_nv) begin
             next_fp_1_s3 = 32'h7FC00000;
