@@ -1,7 +1,7 @@
 `timescale 1ns / 10ps
 
 module bf16_multiplier(
-    input logic clk, n_rst,
+    input logic clk, n_rst, en,
     input logic [15:0] bf_1, bf_2,
     output logic overflow, underflow, nv,
     output logic [31:0] fp_1
@@ -22,7 +22,7 @@ module bf16_multiplier(
             m_1_s1 <= 'd0;
             m_2_s1 <= 'd0;
         end
-        else begin
+        else if(en) begin
             s_out_s1 <= next_s_out_s1;
             e_1_s1 <= bf_1[14:7];
             e_2_s1 <= bf_2[14:7];
@@ -53,7 +53,7 @@ module bf16_multiplier(
             is_nan_s2 <= 'd0;
             flush_zero_s2 <= 'd0;
         end
-        else begin
+        else if(en) begin
             s_out_s2 <= s_out_s1;
             product_s2 <= next_product_s2;
             initial_e_calc_s2 <= next_initial_e_calc_s2;
@@ -87,7 +87,7 @@ module bf16_multiplier(
             underflow <= 'd0;
             nv <= 'd0;
         end
-        else begin
+        else if(en) begin
             fp_1 <= next_fp_1_s3;
             overflow <= next_overflow;
             underflow <= next_underflow;

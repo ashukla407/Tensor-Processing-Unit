@@ -1,7 +1,7 @@
 `timescale 1ns / 10ps
 
 module fp32_adder(
-    input logic clk, n_rst,
+    input logic clk, n_rst, en,
     input logic [31:0] fp_1, fp_2,
     output logic overflow, underflow, nv,
     output logic [31:0] fp_out
@@ -27,7 +27,7 @@ module fp32_adder(
             is_nan_s1 <= 'd0;
             is_inf_s1 <= 'd0;
         end
-        else begin
+        else if (en) begin
             s_high_s1 <= next_s_high_s1;
             s_low_s1 <= next_s_low_s1;
             e_high_s1 <= next_e_high_s1;
@@ -81,7 +81,7 @@ module fp32_adder(
             is_nan_s2 <= 'd0;
             is_inf_s2 <= 'd0;
         end
-        else begin
+        else if (en) begin
             s_out_s2 <= next_s_out_s2;
             e_high_s2 <= next_e_high_s2;
             mantissa_sum_s2 <= next_mantissa_sum_s2;
@@ -126,7 +126,7 @@ module fp32_adder(
             underflow <= 'd0;
             nv <= 'd0;
         end
-        else begin
+        else if (en) begin
             fp_out <= next_fp_out;
             overflow <= next_overflow;
             underflow <= next_underflow;

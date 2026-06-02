@@ -4,7 +4,7 @@ module delayer #(
     parameter DATA_WIDTH = 32,
     parameter DELAY_CYCLES = 1
 )(
-    input  logic clk, n_rst,
+    input  logic clk, n_rst, en,
     input  logic [DATA_WIDTH-1:0] d_in,
     output logic [DATA_WIDTH-1:0] d_out
 );
@@ -19,7 +19,7 @@ module delayer #(
                     for (int i = 1; i <= DELAY_CYCLES; i++) begin
                         shift_reg[i] <= 'd0;
                     end
-                end else begin
+                end else if (en) begin // <-- The Hardware Clock Gate
                     shift_reg[1] <= d_in;
                     for (int i = 2; i <= DELAY_CYCLES; i++) begin
                         shift_reg[i] <= shift_reg[i-1];
