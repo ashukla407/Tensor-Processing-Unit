@@ -12,7 +12,7 @@ module mac_pe (
     output logic [31:0] sum_out
 );
     logic [15:0] locked_weight; //shift registered weights within systolic array
-    always_ff @(posedge clk or negedge n_rst) begin
+    always_ff @(posedge clk, negedge n_rst) begin
         if (!n_rst) begin
             locked_weight <= 16'h0;
         end else if (load_weights) begin

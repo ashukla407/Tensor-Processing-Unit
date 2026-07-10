@@ -19,7 +19,7 @@ module weight_double_buffer #(
 );
     //State machine checking ping pong logic of WDB, 0 means bank 0 R bank 1 W and vice versa
     logic active_read_bank;
-    always_ff @(posedge clk or negedge n_rst) begin
+    always_ff @(posedge clk, negedge n_rst) begin
         if (!n_rst) begin
             active_read_bank <= 1'b0;
         end 

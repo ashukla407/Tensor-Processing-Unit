@@ -21,7 +21,7 @@ module uab_memory #(
     logic [ADDR_WIDTH-1:0] read_base_ptr;
     logic [ADDR_WIDTH-1:0] write_base_ptr;
     //pointer management state machine
-    always_ff @(posedge clk or negedge n_rst) begin
+    always_ff @(posedge clk, negedge n_rst) begin
         if (!n_rst) begin
             read_base_ptr <= '0;
             write_base_ptr <= '0;
