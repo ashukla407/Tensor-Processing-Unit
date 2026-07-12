@@ -5,7 +5,7 @@ module uab_memory #(
     parameter DATA_WIDTH = 4096 //16 bits for 256 activations
 )(
     input  logic clk,
-    input  logic n_rst
+    input  logic n_rst,
     //TPU control
     input  logic advance_layer,
     input  logic [ADDR_WIDTH-1:0] next_write_allocation,

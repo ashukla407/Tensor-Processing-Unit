@@ -41,8 +41,8 @@ module mac_pe (
         .fp_1(product), .fp_2(delayed_psum),
         .overflow(), .underflow(), .nv(), .fp_out(sum_out)
     );
-    //activation delay of 6 cycles
-    delayer #(.DATA_WIDTH(16), .DELAY_CYCLES(6)) act_delay (
+    //activation delay of 1 cycle
+    delayer #(.DATA_WIDTH(16), .DELAY_CYCLES(1)) act_delay (
         .clk(clk), .n_rst(n_rst), .en(run_array),
         .d_in(x_in), .d_out(x_out)
     );
