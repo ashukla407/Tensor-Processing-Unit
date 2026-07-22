@@ -44,8 +44,10 @@ module tpu_controller #(
     localparam OP_REPEAT    = 4'hB;
     localparam OP_HALT      = 4'hF;
     
-    // Fixed: 256 rows * 6 cycles latency = 1536
-    localparam SYSTOLIC_LATENCY = 1536; 
+    //1 sram + 1536 mxu + 255 deskew
+    localparam ACC_WRITE_LATENCY = 1792; 
+    //1 sram + 1536 mxu + 255 deskew + 1 activation
+    localparam UAB_WRITE_LATENCY = 1793; 
     
     typedef enum logic [2:0] {
         FETCH       = 3'b000,
@@ -68,13 +70,24 @@ module tpu_controller #(
     logic issue_acc_we, issue_uab_we;
     logic [ACC_ADDR_WIDTH-1:0] issue_acc_waddr;
     logic [UAB_ADDR_WIDTH-1:0] issue_uab_waddr;
-    logic [10:0] array_in_flight;
+    logic [15:0] array_in_flight;
     logic array_idle;
     assign array_idle = (array_in_flight == '0);
 
-    always_ff @(posedge clk or negedge n_rst) begin
+    always_ff @(posedge clk, negedge n_rst) begin
         if (!n_rst) begin
             array_in_flight <= '0;
+        end else begin
+            case ({ mxu_run_array, (acc_we | uab_we) })
+                2'b10: array_in_flight <= array_in_flight + 1;
+                2'b01: array_in_flight <= array_in_flight - 1;
+                default: array_in_flight <= array_in_flight;
+            endcase
+        end
+    end
+
+    always_ff @(posedge clk, negedge n_rst) begin
+        if (!n_rst) begin
             state <= FETCH;
             pc <= '0;
             current_instr <= '0;
@@ -89,21 +102,15 @@ module tpu_controller #(
         end else begin
             state <= next_state;
             pc <= next_pc;
-            
-            case ({ mxu_run_array, (acc_we | uab_we) })
-                2'b10: array_in_flight <= array_in_flight + 1;
-                2'b01: array_in_flight <= array_in_flight - 1;
-                default: array_in_flight <= array_in_flight;
-            endcase
-
-            if (state == FETCH) current_instr <= imem_data;
-            
+            if (state == FETCH) begin
+                current_instr <= imem_data;
+            end
             if (state == DECODE) begin
                 if (current_instr[31:28] == OP_REPEAT) begin
                     in_loop <= 1'b1;
                     active_loop_count <= current_instr[15:8];
                     active_instr_count_reset <= current_instr[7:0];
-                    loop_start_pc <= pc;
+                    loop_start_pc <= pc + 1; 
                 end
                 if (current_instr[31:28] == OP_MATMUL || current_instr[31:28] == OP_ACT_SAVE) begin
                     stream_counter <= 9'd256;
@@ -111,34 +118,43 @@ module tpu_controller #(
                     stream_uab_addr <= current_instr[14:0];
                 end
             end
-            
-            if (state == EXEC_STREAM && stream_counter > 0) begin
-                stream_counter <= stream_counter - 1;
-                stream_acc_addr <= stream_acc_addr + 1;
-                stream_uab_addr <= stream_uab_addr + 1;
+            if (state == EXEC_STREAM) begin
+                if (stream_counter > 0) begin
+                    stream_counter <= stream_counter - 1;
+                    stream_acc_addr <= stream_acc_addr + 1;
+                    stream_uab_addr <= stream_uab_addr + 1;
+                end
             end
-
-            if (next_state == FETCH && state != FETCH && in_loop && (pc == loop_start_pc + active_instr_count_reset)) begin
-                if (active_loop_count > 0) active_loop_count <= active_loop_count - 1;
-                else in_loop <= 1'b0;
+            if (next_state == FETCH && state != FETCH) begin
+                if (in_loop && (pc == loop_start_pc + active_instr_count_reset - 1)) begin
+                    if (active_loop_count > 0) begin
+                         active_loop_count <= active_loop_count - 1;
+                    end else begin
+                         in_loop <= 1'b0;
+                    end
+                end
             end
-
-            if (state == HALTED) host_interrupt <= 1'b1;
+            if (state == HALTED) begin
+                host_interrupt <= 1'b1;
+            end
         end
     end
-
     assign imem_addr = pc;
-
     always_comb begin
         next_pc = pc;
         if (next_state == FETCH && state != FETCH) begin
-            if (in_loop && (pc == loop_start_pc + active_instr_count_reset)) begin
-                if (active_loop_count > 0) next_pc = loop_start_pc; 
-                else next_pc = pc + 1;
-            end else next_pc = pc + 1; 
+            // Fix: Loop evaluation logic matches flip-flop
+            if (in_loop && (pc == loop_start_pc + active_instr_count_reset - 1)) begin
+                if (active_loop_count > 0) begin
+                    next_pc = loop_start_pc; 
+                end else begin
+                    next_pc = pc + 1;
+                end
+            end else begin
+                next_pc = pc + 1; 
+            end
         end
     end
-
     always_comb begin
         next_state = state;
         pipeline_en = 1'b1;
@@ -158,51 +174,85 @@ module tpu_controller #(
         act_apply_relu = 1'b0;
         dma_req_valid = 1'b0;
         dma_req_type = '0;
-        dma_req_payload = '0;
-
+        dma_req_payload = '0; 
         case (state)
-            FETCH: next_state = DECODE;
+            FETCH: begin
+                next_state = DECODE;
+            end
             DECODE: begin
                 case (current_instr[31:28])
-                    OP_NOP, OP_REPEAT: next_state = FETCH;
-                    OP_HALT:           next_state = HALTED;
-                    OP_WDB_SWAP: begin wdb_swap_banks = 1'b1; next_state = FETCH; end
-                    OP_UAB_ADV: begin uab_advance_layer = 1'b1; uab_next_alloc = current_instr[14:0]; next_state = FETCH; end
-                    OP_LD_WT, OP_LD_UAB, OP_ST_UAB, OP_LD_BIAS: begin
-                        dma_req_valid = 1'b1; dma_req_type = current_instr[31:28]; dma_req_payload = current_instr[27:0]; next_state = FETCH;
+                    OP_NOP, OP_REPEAT: begin
+                        next_state = FETCH;
                     end
-                    OP_SYNC: next_state = WAIT_SYNC;
-                    OP_MATMUL, OP_ACT_SAVE: next_state = EXEC_STREAM;
+                    OP_HALT: begin
+                        next_state = HALTED;
+                    end                    
+                    OP_WDB_SWAP: begin
+                        wdb_swap_banks = 1'b1;
+                        next_state = FETCH;
+                    end                    
+                    OP_UAB_ADV: begin
+                        uab_advance_layer = 1'b1;
+                        uab_next_alloc = current_instr[14:0];
+                        next_state = FETCH;
+                    end                    
+                    OP_LD_WT, OP_LD_UAB, OP_ST_UAB, OP_LD_BIAS: begin
+                        dma_req_valid = 1'b1;
+                        dma_req_type = current_instr[31:28];
+                        dma_req_payload = current_instr[27:0];
+                        next_state = FETCH;
+                    end
+                    OP_SYNC: begin
+                        next_state = WAIT_SYNC;
+                    end                    
+                    OP_MATMUL, OP_ACT_SAVE: begin
+                        next_state = EXEC_STREAM;
+                    end
                     default: next_state = FETCH;
                 endcase
             end
             EXEC_STREAM: begin
                 if (stream_counter > 0) begin
-                    mxu_run_array = 1'b1;
-                    if (current_instr[31:28] == OP_MATMUL) begin
-                        uab_re = 1'b1; uab_rel_raddr = stream_uab_addr;
-                        if (current_instr[27]) begin acc_re = 1'b1; acc_raddr = stream_acc_addr; end
-                        issue_acc_we = 1'b1; issue_acc_waddr = stream_acc_addr;
+                    mxu_run_array = 1'b1;                    
+                    if (current_instr[31:28] == OP_MATMUL) begin                        
+                        uab_re = 1'b1;
+                        uab_rel_raddr = stream_uab_addr;
+                        if (current_instr[27]) begin
+                            acc_re = 1'b1;
+                            acc_raddr = stream_acc_addr;
+                        end
+                        issue_acc_we = 1'b1;
+                        issue_acc_waddr = stream_acc_addr;
                     end else if (current_instr[31:28] == OP_ACT_SAVE) begin
-                        acc_re = 1'b1; acc_raddr = stream_acc_addr; act_apply_relu = current_instr[27];
-                        issue_uab_we = 1'b1; issue_uab_waddr = stream_uab_addr;
+                        acc_re = 1'b1;
+                        acc_raddr = stream_acc_addr;
+                        act_apply_relu = current_instr[27];
+                        issue_uab_we = 1'b1;
+                        issue_uab_waddr = stream_uab_addr;
                     end
-                end else next_state = FETCH;
+                end else begin
+                    next_state = FETCH;
+                end
             end
             WAIT_SYNC: begin
-                if ((current_instr[0] && !dma_idle) || (current_instr[1] && !array_idle)) next_state = WAIT_SYNC;
+                logic wait_dma, wait_array;
+                wait_dma = current_instr[0];
+                wait_array = current_instr[1];
+                if ((wait_dma && !dma_idle) || (wait_array && !array_idle)) next_state = WAIT_SYNC;
                 else next_state = FETCH;
             end
             HALTED: next_state = HALTED;
             default: next_state = FETCH;
         endcase
     end
+    logic [1+ACC_ADDR_WIDTH-1:0] delayed_acc_ctrl;
+    logic [1+UAB_ADDR_WIDTH-1:0] delayed_uab_ctrl;
 
-    delayer #(.DATA_WIDTH(1 + ACC_ADDR_WIDTH), .DELAY_CYCLES(SYSTOLIC_LATENCY))
+    delayer #(.DATA_WIDTH(1 + ACC_ADDR_WIDTH), .DELAY_CYCLES(ACC_WRITE_LATENCY))
     u_acc_shadow (.clk(clk), .n_rst(n_rst), .en(pipeline_en),
     .d_in({issue_acc_we, issue_acc_waddr}), .d_out(delayed_acc_ctrl));
 
-    delayer #(.DATA_WIDTH(1 + UAB_ADDR_WIDTH), .DELAY_CYCLES(SYSTOLIC_LATENCY))
+    delayer #(.DATA_WIDTH(1 + UAB_ADDR_WIDTH), .DELAY_CYCLES(UAB_WRITE_LATENCY))
     u_uab_shadow (.clk(clk), .n_rst(n_rst), .en(pipeline_en),
     .d_in({issue_uab_we, issue_uab_waddr}),.d_out(delayed_uab_ctrl));
 
